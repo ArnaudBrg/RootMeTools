@@ -1,0 +1,144 @@
+#!/usr/bin/env ruby
+
+=begin
+
+= Info
+    Prints out the metadata contained in a PDF document.
+
+= License
+    Copyright (C) 2019  Guillaume Delugré.
+
+    Origami is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Origami is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public License
+    along with Origami.  If not, see <http://www.gnu.org/licenses/>.
+
+=end
+
+begin
+    require 'origami'
+rescue LoadError
+    $: << File.join(__dir__, '../lib')
+    require 'origami'
+end
+include Origami
+
+require 'colorize'
+require 'optparse'
+require 'json'
+
+class OptParser
+    BANNER = <<USAGE
+Usage: #{$0} [<PDF-file>] [-i] [-x]
+Prints out the metadata contained in a PDF document.
+Bug reports or feature requests at: http://github.com/gdelugre/origami
+
+Options:
+USAGE
+
+    def self.parser(options)
+        OptionParser.new do |opts|
+            opts.banner = BANNER
+
+            opts.on("-i", "--info", "Extracts document info metadata") do
+                options[:doc_info] = true
+            end
+
+            opts.on("-x", "--xmp", "Extracts XMP document metadata stream") do
+                options[:doc_stream] = true
+            end
+
+            opts.on("-f", "--format [FORMAT]", %i{text json}, "Output format ('text', 'json')") do |format|
+                options[:output_format] = format
+            end
+
+            opts.on("-n", "--no-color", "Turn off colorized output.") do
+                options[:disable_colors] = true
+            end
+
+            opts.on_tail("-h", "--help", "Show this message") do
+                puts opts
+                exit
+            end
+        end
+    end
+
+    def self.parse(args)
+        options =
+        {
+            output_format: :text,
+            disable_colors: false
+        }
+
+        self.parser(options).parse!(args)
+
+        options
+    end
+end
+
+def print_section(name, elements)
+    puts "[*] #{name}:".magenta
+
+    elements.each_pair do |name, item|
+        print name.ljust(20, ' ').green
+        puts ": #{item}"
+    end
+end
+
+begin
+    @options = OptParser.parse(ARGV)
+
+    unless @options[:doc_info] or @options[:doc_stream]
+        @options[:doc_info] = @options[:doc_stream] = true
+    end
+
+    String.disable_colorization @options[:disable_colors]
+
+    target = (ARGV.empty?) ? STDIN : ARGV.shift
+    params =
+    {
+        verbosity: Parser::VERBOSE_QUIET,
+        lazy: true
+    }
+
+    pdf = PDF.read(target, params)
+    result = {}
+
+    if @options[:doc_info] and pdf.document_info?
+        result[:document_info] = pdf.document_info.map {|k,v| 
+            key = k.value.to_s
+            obj = v.solve
+            str_value = obj.respond_to?(:to_utf8) ? obj.to_utf8 : obj.value.to_s
+
+            [ key, str_value ]
+        }.to_h
+    end
+
+    if @options[:doc_stream] and pdf.metadata?
+        result[:xmp_metadata] = pdf.metadata
+    end
+
+
+    if @options[:output_format] == :text
+        print_section("Document information dictionary", result[:document_info]) if result.key?(:document_info)
+        
+        if result.key?(:xmp_metadata)
+            puts if result.key?(:document_info)
+            print_section("Metadata stream", result[:xmp_metadata])
+        end
+    elsif @options[:output_format] == :json
+        puts JSON.pretty_generate(result)
+    end
+
+rescue
+    puts $!.backtrace.join $/
+    abort "#{$!.class}: #{$!.message}"
+end
